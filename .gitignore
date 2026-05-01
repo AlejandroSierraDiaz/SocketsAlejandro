@@ -22,3 +22,9 @@ docs/
 # Ignorar archivos temporales del sistema
 .DS_Store
 Thumbs.db
+
+# Nuevas exclusiones de Node.js y Docs
+node_modules/
+*.db
+Arquitectura_y_Justificacion.md
+Memoria_del_Proyecto.md
