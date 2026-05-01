@@ -8,85 +8,128 @@ const app = express();
 app.use(cors());
 
 const server = http.createServer(app);
+// Increase max payload size for images (e.g. 10MB)
 const io = new Server(server, {
     cors: {
-        origin: "*", // En producción se debería especificar el origen (ej. http://localhost:5173)
+        origin: "*",
         methods: ["GET", "POST"]
-    }
+    },
+    maxHttpBufferSize: 1e7 // 10 MB
 });
 
-// Almacena los usuarios conectados en memoria para acceso rápido
-const connectedUsers = new Map();
+const connectedUsers = new Map(); // socket.id -> username
 
 io.on('connection', (socket) => {
-    console.log(`Nuevo cliente conectado: ${socket.id}`);
+    console.log(`Nuevo cliente: ${socket.id}`);
 
-    // Evento para identificar al usuario
+    // ----- AUTENTICACION Y ESTADO -----
     socket.on('register_user', (username) => {
         connectedUsers.set(socket.id, username);
+        db.run(`INSERT OR REPLACE INTO users (id, username) VALUES (?, ?)`, [socket.id, username]);
         
-        // Guardar en la BD
-        db.run(`INSERT OR REPLACE INTO users (id, username) VALUES (?, ?)`, [socket.id, username], (err) => {
-            if (err) console.error("Error guardando usuario:", err.message);
-        });
-
-        console.log(`Usuario registrado: ${username} (${socket.id})`);
-        
-        // Notificar a todos sobre el nuevo usuario
         io.emit('user_joined', { id: socket.id, username });
-        
-        // Enviar historial de mensajes recientes al usuario nuevo
-        db.all(`SELECT * FROM messages ORDER BY timestamp DESC LIMIT 50`, (err, rows) => {
-            if (err) {
-                console.error(err.message);
-                return;
-            }
-            socket.emit('message_history', rows.reverse()); // Enviar ordenado de más antiguo a más reciente
-        });
-        
-        // Enviar la lista de usuarios activos
         const usersList = Array.from(connectedUsers, ([id, name]) => ({ id, name }));
         io.emit('active_users', usersList);
     });
 
-    // Evento para recibir y retransmitir mensajes
-    socket.on('send_message', (data) => {
-        const username = connectedUsers.get(socket.id) || "Anónimo";
-        const messageData = {
-            sender_id: socket.id,
-            sender_name: username,
-            content: data.content,
-            timestamp: new Date().toISOString()
-        };
+    socket.on('update_username', (newUsername) => {
+        if(connectedUsers.has(socket.id)) {
+            connectedUsers.set(socket.id, newUsername);
+            db.run(`UPDATE users SET username = ? WHERE id = ?`, [newUsername, socket.id]);
+            const usersList = Array.from(connectedUsers, ([id, name]) => ({ id, name }));
+            io.emit('active_users', usersList);
+            io.emit('username_changed', { id: socket.id, newName: newUsername });
+        }
+    });
 
-        // Guardar en BD
-        db.run(`INSERT INTO messages (sender_id, sender_name, content) VALUES (?, ?, ?)`, 
-            [messageData.sender_id, messageData.sender_name, messageData.content], 
-            function(err) {
-                if (err) {
-                    console.error("Error guardando mensaje:", err.message);
-                    return;
-                }
-                messageData.id = this.lastID;
-                // Retransmitir a todos
-                io.emit('receive_message', messageData);
+    // ----- CANALES DE TEXTO Y DMs -----
+    socket.on('join_channel', (channelName) => {
+        Array.from(socket.rooms).forEach(room => {
+            if (room !== socket.id) socket.leave(room);
+        });
+        
+        socket.join(channelName);
+        
+        db.all(`SELECT * FROM messages WHERE channel = ? ORDER BY timestamp DESC LIMIT 100`, [channelName], (err, rows) => {
+            if (!err) {
+                socket.emit('message_history', rows.reverse());
+            }
         });
     });
 
-    // Evento de desconexión
+    socket.on('send_message', (data) => {
+        const username = connectedUsers.get(socket.id) || "Anónimo";
+        const channel = data.channel || 'general';
+        const messageData = {
+            sender_id: socket.id,
+            sender_name: username,
+            channel: channel,
+            content: data.content,
+            type: data.type || 'text', // 'text' o 'image'
+            timestamp: new Date().toISOString()
+        };
+
+        db.run(`INSERT INTO messages (sender_id, sender_name, channel, content) VALUES (?, ?, ?, ?)`, 
+            [messageData.sender_id, messageData.sender_name, channel, JSON.stringify({text: messageData.content, type: messageData.type})], 
+            function(err) {
+                if (!err) {
+                    messageData.id = this.lastID;
+                    io.to(channel).emit('receive_message', messageData);
+                } else {
+                    console.error("Error guardando mensaje:", err);
+                }
+        });
+    });
+
+    socket.on('typing', (data) => {
+        socket.to(data.channel).emit('user_typing', { username: connectedUsers.get(socket.id), channel: data.channel });
+    });
+
+    // ----- LLAMADAS DE VOZ (WebRTC Signaling) -----
+    socket.on('join_voice', (roomName) => {
+        const username = connectedUsers.get(socket.id);
+        socket.join(roomName);
+        socket.to(roomName).emit('user_joined_voice', { id: socket.id, name: username });
+    });
+
+    socket.on('leave_voice', (roomName) => {
+        socket.leave(roomName);
+        socket.to(roomName).emit('user_left_voice', socket.id);
+    });
+
+    socket.on('webrtc_offer', (data) => {
+        socket.to(data.target).emit('webrtc_offer', {
+            sdp: data.sdp,
+            caller: socket.id,
+            callerName: connectedUsers.get(socket.id)
+        });
+    });
+
+    socket.on('webrtc_answer', (data) => {
+        socket.to(data.target).emit('webrtc_answer', {
+            sdp: data.sdp,
+            callee: socket.id
+        });
+    });
+
+    socket.on('webrtc_ice_candidate', (data) => {
+        socket.to(data.target).emit('webrtc_ice_candidate', {
+            candidate: data.candidate,
+            sender: socket.id
+        });
+    });
+
+    // ----- DESCONEXION -----
     socket.on('disconnect', () => {
         const username = connectedUsers.get(socket.id);
         if (username) {
-            console.log(`Cliente desconectado: ${username} (${socket.id})`);
             connectedUsers.delete(socket.id);
-            
-            // Eliminar de usuarios activos de la DB (o marcar como desconectado, pero por simplicidad borramos)
             db.run(`DELETE FROM users WHERE id = ?`, [socket.id]);
-            
             io.emit('user_left', { id: socket.id, username });
             
             const usersList = Array.from(connectedUsers, ([id, name]) => ({ id, name }));
             io.emit('active_users', usersList);
+            socket.broadcast.emit('user_left_voice', socket.id);
         }
     });
 });

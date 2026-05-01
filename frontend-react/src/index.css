@@ -37,7 +37,6 @@ body {
   background-color: var(--bg-base);
 }
 
-/* Modal and Overlays */
 .modal-overlay {
   position: fixed;
   top: 0; left: 0; right: 0; bottom: 0;
@@ -117,53 +116,11 @@ body {
   margin-top: 1rem;
 }
 
-/* Servers Bar (Leftmost) */
-.servers-bar {
-  width: 72px;
-  background-color: var(--bg-darker);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 1rem 0;
-  gap: 0.5rem;
-  z-index: 10;
-}
-
-.server-icon {
-  width: 48px;
-  height: 48px;
-  border-radius: 24px;
-  background-color: var(--bg-base);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-  color: var(--text-primary);
-  font-weight: 600;
-}
-
-.server-icon:hover, .server-icon.active {
-  border-radius: 16px;
-  background-color: var(--primary);
-  color: white;
-}
-
-.server-divider {
-  width: 32px;
-  height: 2px;
-  background-color: var(--bg-light);
-  border-radius: 1px;
-  margin: 0.5rem 0;
-}
-
-/* Channels Sidebar */
 .channels-sidebar {
   width: 240px;
   background-color: var(--bg-dark);
   display: flex;
   flex-direction: column;
-  border-top-left-radius: 8px;
 }
 
 .sidebar-header {
@@ -175,12 +132,6 @@ body {
   border-bottom: 1px solid var(--bg-darker);
   font-weight: 700;
   box-shadow: 0 1px 2px rgba(0,0,0,0.2);
-  cursor: pointer;
-  transition: background-color 0.2s;
-}
-
-.sidebar-header:hover {
-  background-color: var(--bg-light);
 }
 
 .channels-list {
@@ -228,7 +179,6 @@ body {
   opacity: 0.6;
 }
 
-/* User Profile Panel (Bottom left) */
 .user-panel {
   height: 52px;
   background-color: var(--bg-darker);
@@ -315,7 +265,6 @@ body {
   color: var(--text-primary);
 }
 
-/* Main Chat Area */
 .main-area {
   flex: 1;
   display: flex;
@@ -345,11 +294,10 @@ body {
 .header-actions {
   display: flex;
   gap: 1rem;
+  align-items: center;
 }
 
-/* Call UI */
 .call-container {
-  height: 300px;
   background-color: var(--call-bg);
   border-bottom: 1px solid var(--bg-dark);
   display: flex;
@@ -364,14 +312,12 @@ body {
   display: flex;
   padding: 1rem;
   gap: 1rem;
-  justify-content: center;
+  align-items: center;
 }
 
 .video-participant {
   background-color: var(--bg-darker);
   border-radius: 8px;
-  flex: 1;
-  max-width: 400px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -385,29 +331,24 @@ body {
 }
 
 .participant-avatar {
-  width: 80px;
-  height: 80px;
   border-radius: 50%;
-  background-color: var(--primary);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 2rem;
   font-weight: 700;
+  color: white;
 }
 
 .participant-name {
   position: absolute;
-  bottom: 1rem;
-  left: 1rem;
   background: rgba(0,0,0,0.6);
   padding: 0.2rem 0.5rem;
   border-radius: 4px;
   font-size: 0.8rem;
+  color: white;
 }
 
 .call-controls {
-  height: 64px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -433,7 +374,6 @@ body {
 .call-btn.danger { background-color: var(--danger); }
 .call-btn.danger:hover { background-color: #b52a2e; }
 
-/* Messages Area */
 .messages-wrapper {
   flex: 1;
   display: flex;
@@ -445,6 +385,7 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  position: relative;
 }
 
 .messages-scroll {
@@ -512,7 +453,14 @@ body {
   word-wrap: break-word;
 }
 
-/* Input Area */
+.msg-image {
+  max-width: 400px;
+  max-height: 300px;
+  border-radius: 8px;
+  margin-top: 0.5rem;
+  cursor: pointer;
+}
+
 .input-area {
   padding: 0 1rem 1.5rem 1rem;
 }
@@ -521,7 +469,7 @@ body {
   background-color: var(--bg-light);
   border-radius: 8px;
   display: flex;
-  align-items: flex-start;
+  align-items: flex-end;
   padding: 0.5rem 1rem;
 }
 
@@ -545,11 +493,11 @@ body {
 .input-actions {
   display: flex;
   align-items: center;
-  padding-top: 0.3rem;
+  padding-bottom: 0.3rem;
   margin-left: 0.5rem;
+  gap: 0.5rem;
 }
 
-/* Members Sidebar (Right) */
 .members-sidebar {
   width: 240px;
   background-color: var(--bg-dark);
@@ -592,7 +540,17 @@ body {
   margin-right: 0.75rem;
 }
 
-/* Animations */
+.typing-indicator {
+  position: absolute;
+  bottom: 80px;
+  left: 20px;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  font-weight: bold;
+  animation: fadeIn 0.2s;
+  pointer-events: none;
+}
+
 @keyframes fadeIn {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -605,24 +563,20 @@ body {
 
 @keyframes slideDown {
   from { height: 0; opacity: 0; }
-  to { height: 300px; opacity: 1; }
+  to { height: 220px; opacity: 1; }
 }
 
-/* Scrollbars */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
-
 ::-webkit-scrollbar-track {
   background: transparent;
 }
-
 ::-webkit-scrollbar-thumb {
   background: var(--bg-darker);
   border-radius: 4px;
 }
-
 ::-webkit-scrollbar-thumb:hover {
   background: #111214;
 }

@@ -20,14 +20,20 @@ function initializeDB() {
             connected_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )`);
 
-        // Tabla de mensajes
+        // Tabla de mensajes (ahora con canal)
         db.run(`CREATE TABLE IF NOT EXISTS messages (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             sender_id TEXT,
             sender_name TEXT,
+            channel TEXT DEFAULT 'general',
             content TEXT NOT NULL,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )`);
+        
+        // Si la tabla existia sin la columna channel, intentamos añadirla (ignorar si falla)
+        db.run(`ALTER TABLE messages ADD COLUMN channel TEXT DEFAULT 'general'`, (err) => {
+            // Ignorar error de que la columna ya existe
+        });
     });
 }
 
