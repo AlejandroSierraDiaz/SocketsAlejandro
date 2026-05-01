@@ -18,6 +18,15 @@ const io = new Server(server, {
 });
 
 const connectedUsers = new Map(); // socket.id -> username
+const globalVoiceChannels = new Map(); // roomName -> Array of {id, name, micMuted}
+
+function broadcastVoiceChannels(ioInstance) {
+    const vcState = {};
+    for (let [room, users] of globalVoiceChannels.entries()) {
+        vcState[room] = users;
+    }
+    ioInstance.emit('voice_channels_update', vcState);
+}
 
 io.on('connection', (socket) => {
     console.log(`Nuevo cliente: ${socket.id}`);
@@ -30,6 +39,7 @@ io.on('connection', (socket) => {
         io.emit('user_joined', { id: socket.id, username });
         const usersList = Array.from(connectedUsers, ([id, name]) => ({ id, name }));
         io.emit('active_users', usersList);
+        broadcastVoiceChannels(io); // Send voice channels state to new user
     });
 
     socket.on('update_username', (newUsername) => {
@@ -90,11 +100,25 @@ io.on('connection', (socket) => {
         const username = connectedUsers.get(socket.id);
         socket.join(roomName);
         socket.to(roomName).emit('user_joined_voice', { id: socket.id, name: username });
+
+        if (!globalVoiceChannels.has(roomName)) globalVoiceChannels.set(roomName, []);
+        // Prevent duplicates
+        const usersInRoom = globalVoiceChannels.get(roomName).filter(u => u.id !== socket.id);
+        usersInRoom.push({ id: socket.id, name: username });
+        globalVoiceChannels.set(roomName, usersInRoom);
+        broadcastVoiceChannels(io);
     });
 
     socket.on('leave_voice', (roomName) => {
         socket.leave(roomName);
         socket.to(roomName).emit('user_left_voice', socket.id);
+
+        if (globalVoiceChannels.has(roomName)) {
+            const usersInRoom = globalVoiceChannels.get(roomName).filter(u => u.id !== socket.id);
+            if (usersInRoom.length === 0) globalVoiceChannels.delete(roomName);
+            else globalVoiceChannels.set(roomName, usersInRoom);
+            broadcastVoiceChannels(io);
+        }
     });
 
     socket.on('webrtc_offer', (data) => {
@@ -130,6 +154,18 @@ io.on('connection', (socket) => {
             const usersList = Array.from(connectedUsers, ([id, name]) => ({ id, name }));
             io.emit('active_users', usersList);
             socket.broadcast.emit('user_left_voice', socket.id);
+
+            // Clean up from global voice channels
+            let changed = false;
+            for (let [room, users] of globalVoiceChannels.entries()) {
+                const filtered = users.filter(u => u.id !== socket.id);
+                if (filtered.length !== users.length) {
+                    changed = true;
+                    if (filtered.length === 0) globalVoiceChannels.delete(room);
+                    else globalVoiceChannels.set(room, filtered);
+                }
+            }
+            if (changed) broadcastVoiceChannels(io);
         }
     });
 });

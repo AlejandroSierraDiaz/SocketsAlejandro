@@ -29,7 +29,8 @@ function App() {
   // Voice Chat States
   const [inVoiceChannel, setInVoiceChannel] = useState(null);
   const [micMuted, setMicMuted] = useState(false);
-  const [voiceUsers, setVoiceUsers] = useState([]);
+  const [voiceUsers, setVoiceUsers] = useState([]); // Users in current voice chat for WebRTC
+  const [globalVoiceChannels, setGlobalVoiceChannels] = useState({}); // To display who is in which channel
   
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -102,6 +103,10 @@ function App() {
       }
     });
 
+    socket.on('voice_channels_update', (vcState) => {
+      setGlobalVoiceChannels(vcState);
+    });
+
     // ----- WEBRTC VOICE LOGIC -----
     socket.on('user_joined_voice', async ({ id, name }) => {
       setVoiceUsers(prev => [...prev, { id, name }]);
@@ -153,6 +158,7 @@ function App() {
       socket.off('active_users');
       socket.off('username_changed');
       socket.off('user_typing');
+      socket.off('voice_channels_update');
       socket.off('user_joined_voice');
       socket.off('webrtc_offer');
       socket.off('webrtc_answer');
@@ -352,12 +358,32 @@ function App() {
           </div>
 
           <div className="channel-category">Canales de Voz (Clic para unirte)</div>
+          
+          {/* Voz General */}
           <div className={`channel-item ${inVoiceChannel === 'Voz General' ? 'active' : ''}`} onClick={() => !inVoiceChannel ? joinVoiceChannel('Voz General') : null}>
             <Volume2 size={18} className="channel-icon" style={{ color: inVoiceChannel === 'Voz General' ? 'var(--success)' : '' }} /> Voz General
           </div>
+          {globalVoiceChannels['Voz General'] && globalVoiceChannels['Voz General'].map(u => (
+            <div key={u.id} style={{ display: 'flex', alignItems: 'center', padding: '0.2rem 1rem 0.2rem 2rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              <div style={{ width: 20, height: 20, borderRadius: '50%', backgroundColor: 'var(--primary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '0.5rem', fontSize: '10px' }}>
+                {u.name.charAt(0).toUpperCase()}
+              </div>
+              {u.name}
+            </div>
+          ))}
+
+          {/* Juegos */}
           <div className={`channel-item ${inVoiceChannel === 'Juegos' ? 'active' : ''}`} onClick={() => !inVoiceChannel ? joinVoiceChannel('Juegos') : null}>
             <Volume2 size={18} className="channel-icon" style={{ color: inVoiceChannel === 'Juegos' ? 'var(--success)' : '' }} /> Juegos
           </div>
+          {globalVoiceChannels['Juegos'] && globalVoiceChannels['Juegos'].map(u => (
+            <div key={u.id} style={{ display: 'flex', alignItems: 'center', padding: '0.2rem 1rem 0.2rem 2rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
+              <div style={{ width: 20, height: 20, borderRadius: '50%', backgroundColor: 'var(--primary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '0.5rem', fontSize: '10px' }}>
+                {u.name.charAt(0).toUpperCase()}
+              </div>
+              {u.name}
+            </div>
+          ))}
 
           {directMessages.length > 0 && (
             <>
