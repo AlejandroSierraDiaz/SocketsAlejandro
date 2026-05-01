@@ -8,17 +8,21 @@ const app = express();
 app.use(cors());
 
 const server = http.createServer(app);
-// Increase max payload size for images (e.g. 10MB)
 const io = new Server(server, {
     cors: {
         origin: "*",
         methods: ["GET", "POST"]
     },
-    maxHttpBufferSize: 1e7 // 10 MB
+    maxHttpBufferSize: 1e7 // 10 MB para imagenes
 });
 
-const connectedUsers = new Map(); // socket.id -> username
-const globalVoiceChannels = new Map(); // roomName -> Array of {id, name, micMuted}
+const connectedUsers = new Map(); // socket.id -> { name, avatar }
+const globalVoiceChannels = new Map(); // roomName -> Array of {id, name, avatar}
+
+// Asegurar que existe la tabla de perfiles para no perder avatares al desconectar
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS profiles (username TEXT PRIMARY KEY, avatar TEXT)`);
+});
 
 function broadcastVoiceChannels(ioInstance) {
     const vcState = {};
@@ -33,22 +37,61 @@ io.on('connection', (socket) => {
 
     // ----- AUTENTICACION Y ESTADO -----
     socket.on('register_user', (username) => {
-        connectedUsers.set(socket.id, username);
-        db.run(`INSERT OR REPLACE INTO users (id, username) VALUES (?, ?)`, [socket.id, username]);
-        
-        io.emit('user_joined', { id: socket.id, username });
-        const usersList = Array.from(connectedUsers, ([id, name]) => ({ id, name }));
-        io.emit('active_users', usersList);
-        broadcastVoiceChannels(io); // Send voice channels state to new user
+        // Buscar perfil existente
+        db.get(`SELECT avatar FROM profiles WHERE username = ?`, [username], (err, row) => {
+            const avatar = row ? row.avatar : null;
+            
+            connectedUsers.set(socket.id, { name: username, avatar: avatar });
+            db.run(`INSERT OR IGNORE INTO profiles (username, avatar) VALUES (?, ?)`, [username, avatar]);
+            db.run(`INSERT OR REPLACE INTO users (id, username, avatar) VALUES (?, ?, ?)`, [socket.id, username, avatar]);
+            
+            io.emit('user_joined', { id: socket.id, username, avatar });
+            const usersList = Array.from(connectedUsers, ([id, data]) => ({ id, name: data.name, avatar: data.avatar }));
+            io.emit('active_users', usersList);
+            broadcastVoiceChannels(io);
+        });
     });
 
     socket.on('update_username', (newUsername) => {
         if(connectedUsers.has(socket.id)) {
-            connectedUsers.set(socket.id, newUsername);
+            const userData = connectedUsers.get(socket.id);
+            const oldName = userData.name;
+            const currentAvatar = userData.avatar;
+            userData.name = newUsername;
+            connectedUsers.set(socket.id, userData);
+            
+            db.run(`INSERT OR REPLACE INTO profiles (username, avatar) VALUES (?, ?)`, [newUsername, currentAvatar]);
             db.run(`UPDATE users SET username = ? WHERE id = ?`, [newUsername, socket.id]);
-            const usersList = Array.from(connectedUsers, ([id, name]) => ({ id, name }));
+            
+            const usersList = Array.from(connectedUsers, ([id, data]) => ({ id, name: data.name, avatar: data.avatar }));
             io.emit('active_users', usersList);
-            io.emit('username_changed', { id: socket.id, newName: newUsername });
+            io.emit('username_changed', { id: socket.id, newName: newUsername, oldName });
+        }
+    });
+
+    socket.on('update_avatar', (base64Avatar) => {
+        if(connectedUsers.has(socket.id)) {
+            const userData = connectedUsers.get(socket.id);
+            userData.avatar = base64Avatar;
+            connectedUsers.set(socket.id, userData);
+            
+            db.run(`UPDATE profiles SET avatar = ? WHERE username = ?`, [base64Avatar, userData.name]);
+            db.run(`UPDATE users SET avatar = ? WHERE id = ?`, [base64Avatar, socket.id]);
+            
+            const usersList = Array.from(connectedUsers, ([id, data]) => ({ id, name: data.name, avatar: data.avatar }));
+            io.emit('active_users', usersList);
+            io.emit('avatar_changed', { username: userData.name, avatar: base64Avatar });
+            
+            // Actualizar en voice channels si esta
+            let changed = false;
+            for (let [room, users] of globalVoiceChannels.entries()) {
+                const userIndex = users.findIndex(u => u.id === socket.id);
+                if (userIndex !== -1) {
+                    users[userIndex].avatar = base64Avatar;
+                    changed = true;
+                }
+            }
+            if (changed) broadcastVoiceChannels(io);
         }
     });
 
@@ -60,7 +103,14 @@ io.on('connection', (socket) => {
         
         socket.join(channelName);
         
-        db.all(`SELECT * FROM messages WHERE channel = ? ORDER BY timestamp DESC LIMIT 100`, [channelName], (err, rows) => {
+        // Obtener historial y hacer JOIN con perfiles para tener los avatares incluso de offline
+        db.all(`
+            SELECT m.*, p.avatar as sender_avatar 
+            FROM messages m 
+            LEFT JOIN profiles p ON m.sender_name = p.username 
+            WHERE m.channel = ? 
+            ORDER BY m.timestamp DESC LIMIT 100
+        `, [channelName], (err, rows) => {
             if (!err) {
                 socket.emit('message_history', rows.reverse());
             }
@@ -68,14 +118,15 @@ io.on('connection', (socket) => {
     });
 
     socket.on('send_message', (data) => {
-        const username = connectedUsers.get(socket.id) || "Anónimo";
+        const userData = connectedUsers.get(socket.id) || { name: "Anónimo", avatar: null };
         const channel = data.channel || 'general';
         const messageData = {
             sender_id: socket.id,
-            sender_name: username,
+            sender_name: userData.name,
+            sender_avatar: userData.avatar,
             channel: channel,
             content: data.content,
-            type: data.type || 'text', // 'text' o 'image'
+            type: data.type || 'text',
             timestamp: new Date().toISOString()
         };
 
@@ -92,19 +143,19 @@ io.on('connection', (socket) => {
     });
 
     socket.on('typing', (data) => {
-        socket.to(data.channel).emit('user_typing', { username: connectedUsers.get(socket.id), channel: data.channel });
+        const userData = connectedUsers.get(socket.id);
+        if(userData) socket.to(data.channel).emit('user_typing', { username: userData.name, channel: data.channel });
     });
 
     // ----- LLAMADAS DE VOZ (WebRTC Signaling) -----
     socket.on('join_voice', (roomName) => {
-        const username = connectedUsers.get(socket.id);
+        const userData = connectedUsers.get(socket.id) || { name: "Anónimo" };
         socket.join(roomName);
-        socket.to(roomName).emit('user_joined_voice', { id: socket.id, name: username });
+        socket.to(roomName).emit('user_joined_voice', { id: socket.id, name: userData.name, avatar: userData.avatar });
 
         if (!globalVoiceChannels.has(roomName)) globalVoiceChannels.set(roomName, []);
-        // Prevent duplicates
         const usersInRoom = globalVoiceChannels.get(roomName).filter(u => u.id !== socket.id);
-        usersInRoom.push({ id: socket.id, name: username });
+        usersInRoom.push({ id: socket.id, name: userData.name, avatar: userData.avatar });
         globalVoiceChannels.set(roomName, usersInRoom);
         broadcastVoiceChannels(io);
     });
@@ -122,10 +173,12 @@ io.on('connection', (socket) => {
     });
 
     socket.on('webrtc_offer', (data) => {
+        const userData = connectedUsers.get(socket.id);
         socket.to(data.target).emit('webrtc_offer', {
             sdp: data.sdp,
             caller: socket.id,
-            callerName: connectedUsers.get(socket.id)
+            callerName: userData ? userData.name : "Unknown",
+            callerAvatar: userData ? userData.avatar : null
         });
     });
 
@@ -145,17 +198,16 @@ io.on('connection', (socket) => {
 
     // ----- DESCONEXION -----
     socket.on('disconnect', () => {
-        const username = connectedUsers.get(socket.id);
-        if (username) {
+        const userData = connectedUsers.get(socket.id);
+        if (userData) {
             connectedUsers.delete(socket.id);
             db.run(`DELETE FROM users WHERE id = ?`, [socket.id]);
-            io.emit('user_left', { id: socket.id, username });
+            io.emit('user_left', { id: socket.id, username: userData.name });
             
-            const usersList = Array.from(connectedUsers, ([id, name]) => ({ id, name }));
+            const usersList = Array.from(connectedUsers, ([id, data]) => ({ id, name: data.name, avatar: data.avatar }));
             io.emit('active_users', usersList);
             socket.broadcast.emit('user_left_voice', socket.id);
 
-            // Clean up from global voice channels
             let changed = false;
             for (let [room, users] of globalVoiceChannels.entries()) {
                 const filtered = users.filter(u => u.id !== socket.id);

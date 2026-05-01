@@ -4,36 +4,48 @@ import EmojiPicker from 'emoji-picker-react';
 import { 
   Send, Hash, Users, LogOut, Settings, Phone, Video, 
   Mic, MicOff, PhoneOff, User, Shield, 
-  Search, Plus, Volume2, Smile, Image as ImageIcon
+  Search, Plus, Volume2, Smile, Image as ImageIcon, Camera
 } from 'lucide-react';
 import './index.css';
 
 const socket = io('http://localhost:3001', { autoConnect: false });
 
+function Avatar({ name, avatarBase64, size = 32, style = {} }) {
+  if (avatarBase64) {
+    return <img src={avatarBase64} alt={name} style={{ width: size, height: size, borderRadius: '50%', objectFit: 'cover', ...style }} />;
+  }
+  return (
+    <div className="avatar" style={{ width: size, height: size, fontSize: size * 0.4, ...style }}>
+      {name ? name.charAt(0).toUpperCase() : '?'}
+    </div>
+  );
+}
+
 function App() {
   const [isJoined, setIsJoined] = useState(false);
-  const [username, setUsername] = useState('');
+  const [userProfile, setUserProfile] = useState({ name: '', avatar: null });
   const [newUsernameInput, setNewUsernameInput] = useState('');
   const [messages, setMessages] = useState([]);
   const [inputMessage, setInputMessage] = useState('');
   const [activeUsers, setActiveUsers] = useState([]);
   const [activeChannel, setActiveChannel] = useState('general');
-  const [directMessages, setDirectMessages] = useState([]); // lista de usuarios con los que hay DM
+  const [directMessages, setDirectMessages] = useState([]); 
   
   // UI States
   const [showSettings, setShowSettings] = useState(false);
-  const [showProfile, setShowProfile] = useState(null);
+  const [showProfile, setShowProfile] = useState(null); // { name, avatar }
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
   const [typingUsers, setTypingUsers] = useState([]);
   
   // Voice Chat States
   const [inVoiceChannel, setInVoiceChannel] = useState(null);
   const [micMuted, setMicMuted] = useState(false);
-  const [voiceUsers, setVoiceUsers] = useState([]); // Users in current voice chat for WebRTC
-  const [globalVoiceChannels, setGlobalVoiceChannels] = useState({}); // To display who is in which channel
+  const [voiceUsers, setVoiceUsers] = useState([]); 
+  const [globalVoiceChannels, setGlobalVoiceChannels] = useState({}); 
   
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  const avatarInputRef = useRef(null);
   const localStreamRef = useRef(null);
   const peerConnectionsRef = useRef({}); 
   const audioRefs = useRef({});
@@ -57,13 +69,12 @@ function App() {
     socket.on('connect', () => console.log('WebSocket connected'));
     
     socket.on('message_history', (history) => {
-      // Parsear content si es JSON
       const parsed = history.map(msg => {
         try {
           const contentObj = JSON.parse(msg.content);
           return { ...msg, content: contentObj.text, type: contentObj.type };
         } catch(e) {
-          return { ...msg, type: 'text' }; // Para mensajes antiguos en BD
+          return { ...msg, type: 'text' };
         }
       });
       setMessages(parsed);
@@ -79,7 +90,6 @@ function App() {
           message.type = 'text';
         }
         setMessages((prev) => [...prev, message]);
-        // Quitar al usuario que escribio de "Typing..."
         setTypingUsers(prev => prev.filter(u => u !== message.sender_name));
       }
     });
@@ -88,7 +98,17 @@ function App() {
     
     socket.on('username_changed', ({ id, newName }) => {
       setActiveUsers(prev => prev.map(u => u.id === id ? { ...u, name: newName } : u));
-      if (id === socket.id) setUsername(newName);
+      if (id === socket.id) setUserProfile(prev => ({ ...prev, name: newName }));
+      
+      // Update messages to reflect new name
+      setMessages(prev => prev.map(m => m.sender_id === id ? { ...m, sender_name: newName } : m));
+    });
+
+    socket.on('avatar_changed', ({ username, avatar }) => {
+      setActiveUsers(prev => prev.map(u => u.name === username ? { ...u, avatar } : u));
+      if (username === userProfile.name) setUserProfile(prev => ({ ...prev, avatar }));
+      
+      setMessages(prev => prev.map(m => m.sender_name === username ? { ...m, sender_avatar: avatar } : m));
     });
 
     socket.on('user_typing', ({ username, channel }) => {
@@ -97,28 +117,24 @@ function App() {
           if (!prev.includes(username)) return [...prev, username];
           return prev;
         });
-        setTimeout(() => {
-          setTypingUsers(prev => prev.filter(u => u !== username));
-        }, 3000);
+        setTimeout(() => setTypingUsers(prev => prev.filter(u => u !== username)), 3000);
       }
     });
 
-    socket.on('voice_channels_update', (vcState) => {
-      setGlobalVoiceChannels(vcState);
-    });
+    socket.on('voice_channels_update', (vcState) => setGlobalVoiceChannels(vcState));
 
     // ----- WEBRTC VOICE LOGIC -----
-    socket.on('user_joined_voice', async ({ id, name }) => {
-      setVoiceUsers(prev => [...prev, { id, name }]);
+    socket.on('user_joined_voice', async ({ id, name, avatar }) => {
+      setVoiceUsers(prev => [...prev, { id, name, avatar }]);
       const pc = createPeerConnection(id);
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       socket.emit('webrtc_offer', { target: id, sdp: pc.localDescription });
     });
 
-    socket.on('webrtc_offer', async ({ sdp, caller, callerName }) => {
+    socket.on('webrtc_offer', async ({ sdp, caller, callerName, callerAvatar }) => {
       setVoiceUsers(prev => {
-        if (!prev.find(u => u.id === caller)) return [...prev, { id: caller, name: callerName }];
+        if (!prev.find(u => u.id === caller)) return [...prev, { id: caller, name: callerName, avatar: callerAvatar }];
         return prev;
       });
       const pc = createPeerConnection(caller);
@@ -157,6 +173,7 @@ function App() {
       socket.off('receive_message');
       socket.off('active_users');
       socket.off('username_changed');
+      socket.off('avatar_changed');
       socket.off('user_typing');
       socket.off('voice_channels_update');
       socket.off('user_joined_voice');
@@ -165,7 +182,7 @@ function App() {
       socket.off('webrtc_ice_candidate');
       socket.off('user_left_voice');
     };
-  }, [activeChannel]);
+  }, [activeChannel, userProfile.name]);
 
   const createPeerConnection = (targetId) => {
     const pc = new RTCPeerConnection(configuration);
@@ -201,7 +218,7 @@ function App() {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       localStreamRef.current = stream;
       setInVoiceChannel(channelName);
-      setVoiceUsers([{ id: socket.id, name: username }]);
+      setVoiceUsers([{ id: socket.id, name: userProfile.name, avatar: userProfile.avatar }]);
       socket.emit('join_voice', channelName);
     } catch (err) {
       alert("Error al acceder al micrófono. Da permisos en el navegador.");
@@ -235,11 +252,13 @@ function App() {
 
   const handleJoin = (e) => {
     e.preventDefault();
-    if (username.trim()) {
+    if (userProfile.name.trim()) {
       socket.connect();
-      socket.emit('register_user', username);
-      setNewUsernameInput(username);
-      setIsJoined(true);
+      socket.emit('register_user', userProfile.name);
+      setNewUsernameInput(userProfile.name);
+      
+      // Wait a bit to get avatar from active_users broadcast or user_joined
+      setTimeout(() => setIsJoined(true), 100);
     }
   };
 
@@ -256,17 +275,22 @@ function App() {
     const file = e.target.files[0];
     if (file) {
       const reader = new FileReader();
-      reader.onload = (event) => {
-        const base64Data = event.target.result;
-        socket.emit('send_message', { content: base64Data, channel: activeChannel, type: 'image' });
-      };
+      reader.onload = (event) => socket.emit('send_message', { content: event.target.result, channel: activeChannel, type: 'image' });
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleAvatarUpload = (e) => {
+    const file = e.target.files[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onload = (event) => socket.emit('update_avatar', event.target.result);
       reader.readAsDataURL(file);
     }
   };
 
   const handleTyping = (e) => {
     setInputMessage(e.target.value);
-    
     if (!typingTimeoutRef.current) {
       socket.emit('typing', { channel: activeChannel });
       typingTimeoutRef.current = setTimeout(() => {
@@ -275,23 +299,19 @@ function App() {
     }
   };
 
-  const onEmojiClick = (emojiObject) => {
-    setInputMessage(prev => prev + emojiObject.emoji);
-  };
+  const onEmojiClick = (emojiObject) => setInputMessage(prev => prev + emojiObject.emoji);
 
-  const startDM = (targetUser) => {
-    if (targetUser === username) return;
-    const dmChannel = `dm_${[username, targetUser].sort().join('_')}`;
-    if (!directMessages.includes(targetUser)) {
-      setDirectMessages([...directMessages, targetUser]);
+  const startDM = (targetUserObj) => {
+    if (targetUserObj.name === userProfile.name) return;
+    const dmChannel = `dm_${[userProfile.name, targetUserObj.name].sort().join('_')}`;
+    if (!directMessages.find(u => u.name === targetUserObj.name)) {
+      setDirectMessages([...directMessages, targetUserObj]);
     }
     setActiveChannel(dmChannel);
     setShowProfile(null);
   };
 
-  const formatTime = (iso) => {
-    return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  };
+  const formatTime = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -301,7 +321,7 @@ function App() {
   };
 
   const saveSettings = () => {
-    if (newUsernameInput.trim() && newUsernameInput !== username) {
+    if (newUsernameInput.trim() && newUsernameInput !== userProfile.name) {
       socket.emit('update_username', newUsernameInput);
     }
     setShowSettings(false);
@@ -321,8 +341,8 @@ function App() {
               <input
                 type="text"
                 className="form-input"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                value={userProfile.name}
+                onChange={(e) => setUserProfile({ ...userProfile, name: e.target.value })}
                 required
                 autoComplete="off"
               />
@@ -335,7 +355,11 @@ function App() {
   }
 
   const isDM = activeChannel.startsWith('dm_');
-  const dmTarget = isDM ? activeChannel.replace('dm_', '').replace(username, '').replace('_', '') : null;
+  let dmTarget = null;
+  if (isDM) {
+    const otherName = activeChannel.replace('dm_', '').replace(userProfile.name, '').replace('_', '');
+    dmTarget = directMessages.find(u => u.name === otherName) || { name: otherName, avatar: null };
+  }
 
   return (
     <div className="app-layout">
@@ -365,9 +389,7 @@ function App() {
           </div>
           {globalVoiceChannels['Voz General'] && globalVoiceChannels['Voz General'].map(u => (
             <div key={u.id} style={{ display: 'flex', alignItems: 'center', padding: '0.2rem 1rem 0.2rem 2rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-              <div style={{ width: 20, height: 20, borderRadius: '50%', backgroundColor: 'var(--primary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '0.5rem', fontSize: '10px' }}>
-                {u.name.charAt(0).toUpperCase()}
-              </div>
+              <Avatar name={u.name} avatarBase64={u.avatar} size={20} style={{ marginRight: '0.5rem', backgroundColor: 'var(--primary)' }} />
               {u.name}
             </div>
           ))}
@@ -378,9 +400,7 @@ function App() {
           </div>
           {globalVoiceChannels['Juegos'] && globalVoiceChannels['Juegos'].map(u => (
             <div key={u.id} style={{ display: 'flex', alignItems: 'center', padding: '0.2rem 1rem 0.2rem 2rem', fontSize: '0.8rem', color: 'var(--text-secondary)' }}>
-              <div style={{ width: 20, height: 20, borderRadius: '50%', backgroundColor: 'var(--primary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', marginRight: '0.5rem', fontSize: '10px' }}>
-                {u.name.charAt(0).toUpperCase()}
-              </div>
+              <Avatar name={u.name} avatarBase64={u.avatar} size={20} style={{ marginRight: '0.5rem', backgroundColor: 'var(--primary)' }} />
               {u.name}
             </div>
           ))}
@@ -389,13 +409,11 @@ function App() {
             <>
               <div className="channel-category">Mensajes Privados</div>
               {directMessages.map(dm => {
-                const dmChannel = `dm_${[username, dm].sort().join('_')}`;
+                const dmChannel = `dm_${[userProfile.name, dm.name].sort().join('_')}`;
                 return (
-                  <div key={dm} className={`channel-item ${activeChannel === dmChannel ? 'active' : ''}`} onClick={() => setActiveChannel(dmChannel)}>
-                    <div style={{ width: 18, height: 18, borderRadius: '50%', backgroundColor: 'var(--primary)', marginRight: '0.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: 'white', fontWeight: 'bold' }}>
-                      {dm.charAt(0).toUpperCase()}
-                    </div>
-                    {dm}
+                  <div key={dm.name} className={`channel-item ${activeChannel === dmChannel ? 'active' : ''}`} onClick={() => setActiveChannel(dmChannel)}>
+                    <Avatar name={dm.name} avatarBase64={dm.avatar} size={24} style={{ marginRight: '0.5rem', backgroundColor: 'var(--primary)' }} />
+                    {dm.name}
                   </div>
                 );
               })}
@@ -405,13 +423,13 @@ function App() {
 
         {/* User Panel */}
         <div className="user-panel">
-          <div className="user-info" onClick={() => setShowProfile(username)}>
+          <div className="user-info" onClick={() => setShowProfile(userProfile)}>
             <div className="avatar-wrapper">
-              <div className="avatar">{username.charAt(0).toUpperCase()}</div>
+              <Avatar name={userProfile.name} avatarBase64={userProfile.avatar} />
               <div className="status-dot"></div>
             </div>
             <div className="user-text">
-              <span className="username-display">{username}</span>
+              <span className="username-display">{userProfile.name}</span>
               <span className="user-status-text">En línea</span>
             </div>
           </div>
@@ -434,10 +452,8 @@ function App() {
           <div className="header-title">
             {isDM ? (
               <>
-                <div style={{ width: 24, height: 24, borderRadius: '50%', backgroundColor: 'var(--primary)', marginRight: '8px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '12px', color: 'white', fontWeight: 'bold' }}>
-                  {dmTarget.charAt(0).toUpperCase()}
-                </div>
-                {dmTarget}
+                <Avatar name={dmTarget.name} avatarBase64={dmTarget.avatar} size={24} style={{ marginRight: '8px', backgroundColor: 'var(--primary)' }} />
+                {dmTarget.name}
               </>
             ) : (
               <>
@@ -445,13 +461,6 @@ function App() {
                 {activeChannel}
               </>
             )}
-          </div>
-          <div className="header-actions">
-            <Users size={20} style={{ color: 'var(--text-muted)', cursor: 'pointer' }} />
-            <div style={{ position: 'relative' }}>
-              <input type="text" placeholder="Buscar" style={{ background: 'var(--bg-darker)', border: 'none', color: 'white', padding: '4px 8px', borderRadius: '4px', width: '144px', outline: 'none' }} />
-              <Search size={14} style={{ position: 'absolute', right: '8px', top: '6px', color: 'var(--text-muted)' }} />
-            </div>
           </div>
         </div>
 
@@ -464,9 +473,7 @@ function App() {
             <div className="video-grid" style={{ overflowX: 'auto', justifyContent: 'flex-start' }}>
               {voiceUsers.map((user, i) => (
                 <div key={user.id} className={`video-participant ${user.id === socket.id && !micMuted ? 'speaking' : ''}`} style={{ width: '150px', height: '120px' }}>
-                  <div className="participant-avatar" style={{ width: '60px', height: '60px', fontSize: '1.5rem', backgroundColor: user.id === socket.id ? 'var(--primary)' : 'var(--success)' }}>
-                    {user.name.charAt(0).toUpperCase()}
-                  </div>
+                  <Avatar name={user.name} avatarBase64={user.avatar} size={60} style={{ backgroundColor: user.id === socket.id ? 'var(--primary)' : 'var(--success)' }} />
                   <div className="participant-name" style={{ bottom: '0.5rem' }}>{user.name} {user.id === socket.id ? "(Tú)" : ""}</div>
                 </div>
               ))}
@@ -488,11 +495,9 @@ function App() {
               <div style={{ padding: '2rem 1rem', marginTop: 'auto' }}>
                 {isDM ? (
                   <>
-                    <div style={{ width: 68, height: 68, borderRadius: '50%', backgroundColor: 'var(--primary)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '1rem', color: 'white', fontSize: '2rem', fontWeight: 'bold' }}>
-                      {dmTarget.charAt(0).toUpperCase()}
-                    </div>
-                    <h1 style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>{dmTarget}</h1>
-                    <p style={{ color: 'var(--text-secondary)' }}>Este es el comienzo de tu historial de mensajes directos con <strong>{dmTarget}</strong>.</p>
+                    <Avatar name={dmTarget.name} avatarBase64={dmTarget.avatar} size={68} style={{ marginBottom: '1rem', backgroundColor: 'var(--primary)' }} />
+                    <h1 style={{ fontSize: '2rem', marginBottom: '0.5rem' }}>{dmTarget.name}</h1>
+                    <p style={{ color: 'var(--text-secondary)' }}>Este es el comienzo de tu historial de mensajes directos con <strong>{dmTarget.name}</strong>.</p>
                   </>
                 ) : (
                   <>
@@ -512,8 +517,8 @@ function App() {
                 return (
                   <div key={msg.id || index} className="message-group">
                     {showHeader ? (
-                      <div className="msg-avatar" onClick={() => setShowProfile(msg.sender_name)}>
-                        {msg.sender_name.charAt(0).toUpperCase()}
+                      <div className="msg-avatar" onClick={() => setShowProfile({ name: msg.sender_name, avatar: msg.sender_avatar })}>
+                        <Avatar name={msg.sender_name} avatarBase64={msg.sender_avatar} size={40} />
                       </div>
                     ) : (
                       <div style={{ width: '40px', marginRight: '1rem', flexShrink: 0, textAlign: 'center', fontSize: '0.65rem', color: 'transparent', paddingTop: '0.2rem' }} className="msg-time-hover">
@@ -523,7 +528,7 @@ function App() {
                     <div className="msg-body">
                       {showHeader && (
                         <div className="msg-header">
-                          <span className="msg-author" onClick={() => setShowProfile(msg.sender_name)}>{msg.sender_name}</span>
+                          <span className="msg-author" onClick={() => setShowProfile({ name: msg.sender_name, avatar: msg.sender_avatar })}>{msg.sender_name}</span>
                           <span className="msg-timestamp">{formatTime(msg.timestamp)}</span>
                         </div>
                       )}
@@ -570,7 +575,7 @@ function App() {
                 </button>
                 <textarea
                   className="input-field"
-                  placeholder={`Enviar mensaje a ${isDM ? dmTarget : '#' + activeChannel}`}
+                  placeholder={`Enviar mensaje a ${isDM ? dmTarget.name : '#' + activeChannel}`}
                   value={inputMessage}
                   onChange={handleTyping}
                   onKeyDown={handleKeyDown}
@@ -600,11 +605,9 @@ function App() {
               <div className="members-list">
                 <div className="member-category">En línea — {activeUsers.length}</div>
                 {activeUsers.map(user => (
-                  <div key={user.id} className="member-item" onClick={() => setShowProfile(user.name)}>
+                  <div key={user.id} className="member-item" onClick={() => setShowProfile({ name: user.name, avatar: user.avatar })}>
                     <div className="avatar-wrapper">
-                      <div className="avatar" style={{ width: 32, height: 32 }}>
-                        {user.name.charAt(0).toUpperCase()}
-                      </div>
+                      <Avatar name={user.name} avatarBase64={user.avatar} size={32} />
                       <div className="status-dot"></div>
                     </div>
                     <span style={{ color: 'var(--text-secondary)' }}>{user.name}</span>
@@ -640,8 +643,24 @@ function App() {
               <div style={{ backgroundColor: 'var(--bg-dark)', borderRadius: '8px', padding: '1rem' }}>
                 <div style={{ height: '100px', backgroundColor: 'var(--primary)', borderRadius: '8px 8px 0 0', margin: '-1rem -1rem 1rem -1rem' }}></div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginTop: '-40px' }}>
-                  <div className="avatar" style={{ width: 80, height: 80, fontSize: '2rem', border: '6px solid var(--bg-dark)' }}>
-                    {username.charAt(0).toUpperCase()}
+                  <div style={{ position: 'relative' }}>
+                    <div style={{ border: '6px solid var(--bg-dark)', borderRadius: '50%', backgroundColor: 'var(--bg-dark)' }}>
+                      <Avatar name={userProfile.name} avatarBase64={userProfile.avatar} size={80} />
+                    </div>
+                    <button 
+                      onClick={() => avatarInputRef.current?.click()}
+                      style={{ position: 'absolute', top: 0, right: 0, background: 'var(--primary)', border: 'none', borderRadius: '50%', padding: '0.4rem', color: 'white', cursor: 'pointer', boxShadow: '0 2px 5px rgba(0,0,0,0.5)' }}
+                      title="Cambiar Avatar"
+                    >
+                      <Camera size={16} />
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        style={{ display: 'none' }} 
+                        ref={avatarInputRef} 
+                        onChange={handleAvatarUpload} 
+                      />
+                    </button>
                   </div>
                 </div>
                 <div style={{ marginTop: '1rem', backgroundColor: 'var(--bg-darker)', borderRadius: '8px', padding: '1rem' }}>
@@ -670,16 +689,16 @@ function App() {
           <div className="modal-content" onClick={e => e.stopPropagation()} style={{ width: '300px', padding: 0, overflow: 'hidden', position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', animation: 'scaleIn 0.2s ease-out' }}>
             <div style={{ height: '60px', backgroundColor: 'var(--primary)' }}></div>
             <div style={{ padding: '1rem', backgroundColor: 'var(--bg-dark)', position: 'relative' }}>
-              <div className="avatar" style={{ width: 80, height: 80, fontSize: '2rem', border: '6px solid var(--bg-dark)', position: 'absolute', top: '-40px' }}>
-                {showProfile.charAt(0).toUpperCase()}
+              <div style={{ position: 'absolute', top: '-40px', border: '6px solid var(--bg-dark)', borderRadius: '50%', backgroundColor: 'var(--bg-dark)' }}>
+                <Avatar name={showProfile.name} avatarBase64={showProfile.avatar} size={80} />
               </div>
               <div style={{ marginTop: '40px', backgroundColor: 'var(--bg-darker)', borderRadius: '8px', padding: '1rem' }}>
-                <h3 style={{ margin: 0 }}>{showProfile}</h3>
+                <h3 style={{ margin: 0 }}>{showProfile.name}</h3>
                 <div style={{ borderTop: '1px solid var(--border)', margin: '0.5rem 0' }}></div>
                 <div className="form-label">MIEMBRO DE DEVCHAT DESDE</div>
                 <div style={{ fontSize: '0.85rem' }}>{new Date().toLocaleDateString()}</div>
                 
-                {showProfile === username ? (
+                {showProfile.name === userProfile.name ? (
                   <button className="btn btn-primary" style={{ marginTop: '1rem' }} onClick={() => { setShowProfile(null); setShowSettings(true); }}>Editar Perfil</button>
                 ) : (
                   <button className="btn btn-primary" style={{ marginTop: '1rem', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }} onClick={() => startDM(showProfile)}>

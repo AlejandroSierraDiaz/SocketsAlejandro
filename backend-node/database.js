@@ -17,8 +17,11 @@ function initializeDB() {
         db.run(`CREATE TABLE IF NOT EXISTS users (
             id TEXT PRIMARY KEY,
             username TEXT NOT NULL,
+            avatar TEXT,
             connected_at DATETIME DEFAULT CURRENT_TIMESTAMP
         )`);
+        
+        db.run(`ALTER TABLE users ADD COLUMN avatar TEXT`, (err) => {});
 
         // Tabla de mensajes (ahora con canal)
         db.run(`CREATE TABLE IF NOT EXISTS messages (
